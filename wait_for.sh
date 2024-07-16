@@ -10,12 +10,12 @@ TOP_PID=$$
 KUBECTL_ARGS=""
 WAIT_TIME="${WAIT_TIME:-2}" # seconds
 DEBUG="${DEBUG:-0}"
-TREAT_ERRORS_AS_READY=0
+TREAT_ERRORS_AS_READY="${TREAT_ERRORS_AS_READY:-0}"
 FAIL_ON_ERROR="${FAIL_ON_ERROR:-1}"
 
 usage() {
 cat <<EOF
-This script waits until a job, pod or service enter ready state. 
+This script waits until a job, pod or service enter ready state.
 
 ${0##*/} job [<job name> | -l<kubectl selector>]
 ${0##*/} pod [<pod name> | -l<kubectl selector>]
@@ -25,8 +25,14 @@ Examples:
 Wait for all pods with a following label to enter 'Ready' state:
 ${0##*/} pod -lapp=develop-volume-gluster-krakow
 
+Wait for all selected pods to enter the 'Ready' state:
+${0##*/} pod -l"release in (develop), chart notin (cross-support-job-3p)"
+
 Wait for all pods with a following label to enter 'Ready' or 'Error' state:
 ${0##*/} pod-we -lapp=develop-volume-gluster-krakow
+
+Wait for at least one pod to enter the 'Ready' state, even when the other ones are in 'Error' state:
+${0##*/} pod-wr -lapp=develop-volume-gluster-krakow
 
 Wait for all the pods in that job to have a 'Succeeded' state:
 ${0##*/} job develop-volume-s3-krakow-init
@@ -34,8 +40,8 @@ ${0##*/} job develop-volume-s3-krakow-init
 Wait for all the pods in that job to have a 'Succeeded' or 'Failed' state:
 ${0##*/} job-we develop-volume-s3-krakow-init
 
-Wait for all selected pods to enter the 'Ready' state:
-${0##*/} pod -l"release in (develop), chart notin (cross-support-job-3p)"
+Wait for at least one pod in that job to have 'Succeeded' state, does not mind some 'Failed' ones:
+${0##*/} job-wr develop-volume-s3-krakow-init
 
 EOF
 exit 1
@@ -74,6 +80,9 @@ get_pod_state() {
   {{- if ne $hasReadyStatus true -}}
     {{- printf "False" -}}
   {{- end -}}
+  {{- if eq $hasReadyStatus true -}}
+    {{- printf "Ready" -}}
+  {{- end -}}
 {{- end -}}
 
 {{- if .items -}}
@@ -83,6 +92,7 @@ get_pod_state() {
 {{- else -}}
     {{ template "checkStatus" . }}
 {{- end -}}' 2>&1)
+
     if [ $? -ne 0 ]; then
         if expr match "$get_pod_state_output1" '\(.*not found$\)' 1>/dev/null ; then
             echo "No pods found, waiting for them to be created..." >&2
@@ -94,13 +104,25 @@ get_pod_state() {
     elif [ $DEBUG -ge 2 ]; then
         echo "$get_pod_state_output1" >&2
     fi
-    if [ $TREAT_ERRORS_AS_READY -eq 1 ]; then
-        get_pod_state_output1=$(printf "%s" "$get_pod_state_output1" | sed 's/False:Error//g' )
-        if [ $DEBUG -ge 1 ]; then
-            echo "$get_pod_state_output1" >&2
+
+    if [ $TREAT_ERRORS_AS_READY -eq 0 ]; then
+        get_pod_state_output1=$(printf "%s" "$get_pod_state_output1" | sed 's/Ready//g' )
+    elif [ $TREAT_ERRORS_AS_READY -eq 1 ]; then
+        get_pod_state_output1=$(printf "%s" "$get_pod_state_output1" | sed 's/Ready\|False:Error//g' )
+    elif [ $TREAT_ERRORS_AS_READY -eq 2 ]; then
+        if expr match "$get_pod_state_output1" '\(.*Ready.*\)' 1>/dev/null ; then
+          get_pod_state_output1=$(printf "%s" "$get_pod_state_output1" | sed 's/Ready\|False:Error//g' )
+        else
+          get_pod_state_output1='No pods ready'
         fi
     fi
+
+    if [ $DEBUG -ge 1 ]; then
+        echo "$get_pod_state_output1" >&2
+    fi
+
     get_pod_state_output2=$(printf "%s" "$get_pod_state_output1" | xargs )
+
     if [ $DEBUG -ge 1 ]; then
         echo "$get_pod_state_output2" >&2
     fi
@@ -135,34 +157,33 @@ get_service_state() {
 # Job or set of jobs is considered ready if all of them succeeded at least once
 # example output with 2 still running jobs would be "0 0"
 # this function considers the line:
-# Pods Statuses:	0 Running / 1 Succeeded / 0 Failed
+# Pods Statuses:    0 Running / 1 Succeeded / 0 Failed
+# Pods Statuses:    1 Active (0 Ready) / 0 Succeeded / 0 Failed
 # in a 'kubectl describe' job output.
 get_job_state() {
     get_job_state_name="$1"
     get_job_state_output=$(kubectl describe jobs "$get_job_state_name" $KUBECTL_ARGS 2>&1)
+
     if [ $? -ne 0 ]; then
         echo "$get_job_state_output" >&2
         kill -s TERM $TOP_PID
     elif [ $DEBUG -ge 2 ]; then
         echo "$get_job_state_output" >&2
     fi
-    if [ "$get_job_state_output" = "" ]; then
+    if [ "$get_job_state_output" == "" ] || echo "$get_job_state_output" | grep -q "No resources found"; then
         echo "wait_for.sh: No jobs found!" >&2
         kill -s TERM $TOP_PID
     fi
-    get_job_state_output1=$(printf "%s" "$get_job_state_output" | sed -nr 's#.*:[[:blank:]]+([[:digit:]]+) [[:alpha:]]+ / ([[:digit:]]+) [[:alpha:]]+ / ([[:digit:]]+) [[:alpha:]]+.*#\1:\2:\3#p' 2>&1)
+
+    # Extract number of <avtive>:<ready>:<succeeded>:<failed>
+    # Ignore the Ready number, as it will alwasy be less or equal to Active number
+    get_job_state_output1=$(printf "%s" "$get_job_state_output" | sed -nr 's#.*:[[:blank:]]+([[:digit:]]+) [[:alpha:]]+ \(+([[:digit:]]+) [[:alpha:]]+\) / ([[:digit:]]+) [[:alpha:]]+ / ([[:digit:]]+) [[:alpha:]]+.*#\1:\3:\4#p' 2>&1)
     if [ $? -ne 0 ]; then
         echo "$get_job_state_output" >&2
         echo "$get_job_state_output1" >&2
         kill -s TERM $TOP_PID
     elif [ $DEBUG -ge 2 ]; then
-        echo "$get_job_state_output1" >&2
-    fi
-
-    # Extract number of <running>:<succeeded>:<failed>
-    get_job_state_output1=$(printf "%s" "$get_job_state_output" | sed -nr 's#.*:[[:blank:]]+([[:digit:]]+) [[:alpha:]]+ / ([[:digit:]]+) [[:alpha:]]+ / ([[:digit:]]+) [[:alpha:]]+.*#\1:\2:\3#p' 2>&1)
-    if [ $DEBUG -ge 1 ]; then
-        echo "$get_job_state_output1" >&2
+        echo "${get_job_state_output1}" >&2
     fi
 
     if [ $FAIL_ON_ERROR -eq 1 ]; then
@@ -173,19 +194,33 @@ get_job_state() {
       fi
     fi
 
-    # Map triplets of <running>:<succeeded>:<failed> to not ready (emit 1) state
+    if [ $FAIL_ON_ERROR -eq 1 ]; then
+      error_jobs=$(printf "%s" "$get_job_state_output" | sed -nr 's#.*:[[:blank:]]+([[:digit:]]+) [[:alpha:]]+ / ([[:digit:]]+) [[:alpha:]]+ / ([[:digit:]]+) [[:alpha:]]+.*#\3#p' 2>&1)
+
+      if [ "$error_jobs" -gt 0 ]; then
+        failed "$wait_for_resource_type" "$wait_for_resource_descriptor"
+      fi
+    fi
+
+    # Map triplets of <avtive>:<succeeded>:<failed> to not ready (emit 1) state
     if [ $TREAT_ERRORS_AS_READY -eq 0 ]; then
-        # Two conditions: 
-        #   - pods are distributed between all 3 states with at least 1 pod running - then emit 1
-        #   - or more then 1 pod have failed and some are completed - also emit 1
-        sed_reg='-e s/^[1-9][[:digit:]]*:[[:digit:]]+:[[:digit:]]+$/1/p -e s/^0:[[:digit:]]+:[1-9][[:digit:]]+$/1/p'
-    else
+        # Two conditions:
+        #   - pods are distributed between all 3 states with at least 1 pod active - then emit 1
+        #   - or more then 0 pods have failed and some are completed - also emit 1
+        sed_reg='-e s/^[1-9][[:digit:]]*:[[:digit:]]+:[[:digit:]]+$/1/p -e s/^0:[[:digit:]]+:[1-9][[:digit:]]*$/1/p'
+    elif [ $TREAT_ERRORS_AS_READY -eq 1 ]; then
         # When allowing for failed jobs
-        #   - pods are distributed between all 3 states with at least 1 pod running- then emit 1
+        #   - pods are distributed between all 3 states with at least 1 pod active - then emit 1
         #   - all other options include all pods Completed or Failed - which are fine
         sed_reg='-e s/^[1-9][[:digit:]]*:[[:digit:]]+:[[:digit:]]+$/1/p'
+    elif [ $TREAT_ERRORS_AS_READY -eq 2 ]; then
+        # When allowing for failed jobs but at least one pod have to Succeed
+        #   - pods are distributed between all 3 states with at least 1 pod active - then emit 1
+        #   - some pods are failed, but no pod is completed yet - then emit 1
+        #   - when no pod is active and at least one is completed - all is fine
+        sed_reg='-e s/^[1-9][[:digit:]]*:[[:digit:]]+:[[:digit:]]+$/1/p -e s/^0:0:[[:digit:]]+$/1/p'
     fi
-    
+
     get_job_state_output2=$(printf "%s" "$get_job_state_output1" | sed -nr $sed_reg 2>&1)
     if [ $DEBUG -ge 1 ]; then
         echo "$get_job_state_output2" >&2
@@ -204,7 +239,8 @@ wait_for_resource() {
     while [ -n "$(get_${wait_for_resource_type}_state "$wait_for_resource_descriptor")" ] ; do
         print_KUBECTL_ARGS="$KUBECTL_ARGS"
         [ "$print_KUBECTL_ARGS" != "" ] && print_KUBECTL_ARGS=" $print_KUBECTL_ARGS"
-        echo "Waiting for $wait_for_resource_type $wait_for_resource_descriptor${print_KUBECTL_ARGS}..."
+        timestamp=$(date +'%Y-%m-%d %H:%M:%S')
+        echo "[$timestamp] Waiting for $wait_for_resource_type $wait_for_resource_descriptor${print_KUBECTL_ARGS}..."
         sleep "$WAIT_TIME"
     done
     ready "$wait_for_resource_type" "$wait_for_resource_descriptor"
@@ -236,6 +272,11 @@ main() {
         pod-we|job-we)
             main_resource=${1%-we}
             TREAT_ERRORS_AS_READY=1
+            shift
+            ;;
+        pod-wr|job-wr)
+            main_resource=${1%-wr}
+            TREAT_ERRORS_AS_READY=2
             shift
             ;;
         *)

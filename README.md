@@ -1,12 +1,15 @@
 [![Latest Release](https://img.shields.io/github/v/release/groundnuty/k8s-wait-for?logo=GitHub)](https://github.com/groundnuty/k8s-wait-for/releases/latest)
-[![Build Status](https://travis-ci.org/groundnuty/k8s-wait-for.svg?branch=master)](https://travis-ci.org/groundnuty/k8s-wait-for)
-[![Codacy Badge](https://api.codacy.com/project/badge/Grade/9e61e311725b4015a24f294c591746b1)](https://www.codacy.com/app/groundnuty/k8s-wait-for?utm_source=github.com&amp;utm_medium=referral&amp;utm_content=groundnuty/k8s-wait-for&amp;utm_campaign=Badge_Grade)
-[![Latest Docker Yag](https://img.shields.io/docker/v/groundnuty/k8s-wait-for?logo=docker)](https://microbadger.com/images/groundnuty/k8s-wait-for "Get your own version badge on microbadger.com")
-[![Latest Docker Tag Details](https://images.microbadger.com/badges/image/groundnuty/k8s-wait-for.svg?logo=docker)](https://microbadger.com/images/groundnuty/k8s-wait-for "Get your own image badge on microbadger.com")
+[![Build Status](https://github.com/groundnuty/k8s-wait-for/actions/workflows/build-and-publish.yml/badge.svg)](https://github.com/groundnuty/k8s-wait-for/actions/workflows/build-and-publish.yml)
+[![Trivy Security Scan](https://github.com/groundnuty/k8s-wait-for/actions/workflows/trivy.yml/badge.svg)](https://github.com/groundnuty/k8s-wait-for/actions/workflows/trivy.yml)
+[![Codacy Badge](https://app.codacy.com/project/badge/Grade/607e33a0f020475f867fcf443bdab51b)](https://www.codacy.com/gh/groundnuty/k8s-wait-for/dashboard?utm_source=github.com&amp;utm_medium=referral&amp;utm_content=groundnuty/k8s-wait-for&amp;utm_campaign=Badge_Grade)
+[![Latest Docker Tag](https://img.shields.io/docker/v/groundnuty/k8s-wait-for?logo=docker)](https://hub.docker.com/r/groundnuty/k8s-wait-for/tags)
+[![Latest GHCR Image](https://ghcr-badge.herokuapp.com/groundnuty/k8s-wait-for/tags?n=1&label=GHCR%20Image)](https://github.com/groundnuty/k8s-wait-for/pkgs/container/k8s-wait-for)
 
 # k8s-wait-for
 
 > This tool is still actively used and working stably despite not too frequent commits! Pull requests are most welcome!
+
+> Important: For kubernetes versions <=1.23 use k8s-wait-for versions 1.*, see [here](https://github.com/groundnuty/k8s-wait-for/issues/60#issuecomment-1313483011).
 
 A simple script that allows waiting for a k8s service, job or pods to enter the desired state.
 
@@ -15,7 +18,7 @@ A simple script that allows waiting for a k8s service, job or pods to enter the 
 You can start simple. Run it on your cluster in a namespace you already have something deployed:
 
 ```bash
-kubectl run --generator=run-pod/v1 k8s-wait-for --rm -it --image groundnuty/k8s-wait-for:v1.3 --restart Never --command /bin/sh
+kubectl run k8s-wait-for --rm -it --image ghcr.io/groundnuty/k8s-wait-for:v1.6 --restart Never --command /bin/sh
 ```
 
 Read `--help` and play with it!
@@ -32,8 +35,14 @@ Examples:
 Wait for all pods with a following label to enter 'Ready' state:
 wait_for.sh pod -lapp=develop-volume-gluster-krakow
 
+Wait for all selected pods to enter the 'Ready' state:
+wait_for.sh pod -l"release in (develop), chart notin (cross-support-job-3p)"
+
 Wait for all pods with a following label to enter 'Ready' or 'Error' state:
 wait_for.sh pod-we -lapp=develop-volume-gluster-krakow
+
+Wait for at least one pod to enter the 'Ready' state, even when the other ones are in 'Error' state:
+wait_for.sh pod-wr -lapp=develop-volume-gluster-krakow
 
 Wait for all the pods in that job to have a 'Succeeded' state:
 wait_for.sh job develop-volume-s3-krakow-init
@@ -41,8 +50,8 @@ wait_for.sh job develop-volume-s3-krakow-init
 Wait for all the pods in that job to have a 'Succeeded' or 'Failed' state:
 wait_for.sh job-we develop-volume-s3-krakow-init
 
-Wait for all selected pods to enter the 'Ready' state:
-wait_for.sh pod -l"release in (develop), chart notin (cross-support-job-3p)"
+Wait for at least one pod in that job to have 'Succeeded' state, does not mind some 'Failed' ones:
+wait_for.sh job-wr develop-volume-s3-krakow-init
 ```
 
 ## Example
@@ -83,19 +92,19 @@ spec:
     spec:
       initContainers:
         - name: wait-for-onezone
-          image: groundnuty/k8s-wait-for:v1.3
+          image: ghcr.io/groundnuty/k8s-wait-for:v1.6
           imagePullPolicy: Always
           args:
             - "job"
             - "develop-onezone-ready-check"
         - name: wait-for-volume-ceph
-          image: groundnuty/k8s-wait-for:v1.3
+          image: ghcr.io/groundnuty/k8s-wait-for:v1.6
           imagePullPolicy: Always
           args:
             - "pod"
             - "-lapp=develop-volume-ceph-krakow"
         - name: wait-for-volume-gluster
-          image: groundnuty/k8s-wait-for:v1.3
+          image: ghcr.io/groundnuty/k8s-wait-for:v1.6
           imagePullPolicy: Always
           args:
             - "pod"
@@ -110,8 +119,8 @@ spec:
 
 This container is used extensively in deployments of Onedata system [onedata/charts](https://github.com/onedata/charts) to specify dependencies. It leverages Kubernetes [init containers](https://kubernetes.io/docs/concepts/workloads/pods/init-containers/), thus providing:
 
-- a detailed event log in `kubectl describe <pod>`, on what init container is pod hanging at the moment.
-- a comprehensive view in `kubectl get pods` output where init containers are shown in a form `Init:<ready>/<total>`
+    - a detailed event log in `kubectl describe <pod>`, on what init container is pod hanging at the moment.
+    - a comprehensive view in `kubectl get pods` output where init containers are shown in a form `Init:<ready>/<total>`
 
 Example output from the deployment run of ~16 pod with dependencies just after deployment:
 
@@ -188,3 +197,21 @@ develop-volume-s3-krakow-23786741-pdxtj                1/1       Running        
 develop-volume-s3-lisbon-3912793669-d4xh5              1/1       Running           0          59s
 develop-volume-s3-paris-124394749-qwt18                1/1       Running           0          57s
 ```
+
+## Troubleshooting
+
+Verify that you can access the Kubernetes API from within the k8s-wait-for container by running `kubectl get services`. If you get a permissions error like
+
+`Error from server (Forbidden): services is forbidden: User "system:serviceaccount:default:default" cannot list resource "services" in API group "" in the namespace "default"`
+
+the pod lacks the permissions to perform the `kubectl get` query. To fix this, follow the instrctions for the 'pod-reader' role and clusterrole [here](https://kubernetes.io/docs/reference/access-authn-authz/rbac/#kubectl-create-role
+).
+
+or use these command lines which add services and deployments to the pods in those examples:
+`kubectl create role pod-reader --verb=get --verb=list --verb=watch --resource=pods,services,deployments`
+
+`kubectl create rolebinding default-pod-reader --role=pod-reader --serviceaccount=default:default --namespace=default`
+
+An extensive discussion on the problem of granting necessary permissions and a number of example solutions can be found [here](https://github.com/groundnuty/k8s-wait-for/issues/6).
+
+Make sure the service account is mounted. `The connection to the server localhost:8080 was refused - did you specify the right host or port?` might indicate that the service account is not mounted to the pod. Double check whether your service account and pod define `automountServiceAccountToken: true`. If the service account is mounted, you should see files inside `/var/run/secrets/kubernetes.io/serviceaccount` folder, otherwise `/var/run/secrets/kubernetes.io` might not exist at all.
